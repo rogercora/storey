@@ -7,12 +7,10 @@ import { recordActivity } from "@/lib/audit";
 
 export const runtime = "nodejs";
 
-const CATEGORIES = ["coffee", "dairy", "syrups", "packaging", "kitchen", "bakery", "drinks", "other"] as const;
-
 const patchSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
   brand: z.string().trim().max(80).optional().nullable(),
-  category: z.enum(CATEGORIES).optional(),
+  category: z.string().trim().toLowerCase().regex(/^[a-z0-9_]{2,32}$/).optional(),
   zone_id: z.string().uuid().optional(),
   supplier_id: z.string().uuid().optional().nullable(),
   new_supplier_name: z.string().trim().max(100).optional().nullable(),

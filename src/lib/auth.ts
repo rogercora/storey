@@ -1,10 +1,12 @@
 import type { SupabaseClient, User } from "@supabase/supabase-js";
 
+export type UserRole = "admin" | "supervisor" | "staff";
+
 export interface Profile {
   id: string;
   full_name: string;
   email: string;
-  role: "admin" | "staff";
+  role: UserRole;
   status: "pending" | "active" | "suspended";
 }
 
@@ -38,6 +40,16 @@ export async function requireActiveUser(supabase: SupabaseClient): Promise<AuthR
   return res;
 }
 
+/** API guard: active AND role in ('admin', 'supervisor'). */
+export async function requireSupervisorOrAdmin(supabase: SupabaseClient): Promise<AuthResult> {
+  const res = await requireActiveUser(supabase);
+  if (!res.ok) return res;
+  if (res.profile.role !== "admin" && res.profile.role !== "supervisor") {
+    return { ok: false, status: 403, error: "Supervisor or Admin access required." };
+  }
+  return res;
+}
+
 /** API guard: active AND role = 'admin'. */
 export async function requireAdmin(supabase: SupabaseClient): Promise<AuthResult> {
   const res = await requireActiveUser(supabase);
@@ -45,4 +57,3 @@ export async function requireAdmin(supabase: SupabaseClient): Promise<AuthResult
   if (res.profile.role !== "admin") return { ok: false, status: 403, error: "Admin access required." };
   return res;
 }
-

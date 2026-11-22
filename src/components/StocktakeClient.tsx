@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BrandHeader } from "@/components/Brand";
 import { ReviewItemCard } from "@/components/ReviewItemCard";
-import { ProductFormModal, type EditableProduct, type SupplierOption, type ZoneOption } from "@/components/ProductFormModal";
+import { ProductFormModal, type CategoryOption, type EditableProduct, type SupplierOption, type ZoneOption } from "@/components/ProductFormModal";
 import { compressPhoto, getQueuedForZone, queuePhotos, removeQueuedBatch, type QueuedBatch } from "@/lib/offline-queue";
 import { formatUkDateTime } from "@/lib/dates";
 import { formatGBP } from "@/lib/numbers";
@@ -37,6 +37,7 @@ const QUALITY_LABELS: Record<string, string> = {
 export function StocktakeClient({
   zone,
   zones,
+  categories,
   initialSuppliers,
   initialProductCount,
   initialSessionId,
@@ -48,6 +49,7 @@ export function StocktakeClient({
 }: {
   zone: { id: string; name: string; description: string | null };
   zones: ZoneOption[];
+  categories?: CategoryOption[];
   initialSuppliers: SupplierOption[];
   initialProductCount: number;
   initialSessionId: string | null;
@@ -693,6 +695,7 @@ export function StocktakeClient({
           mode={productModal.mode}
           zones={zones}
           defaultZoneId={zone.id}
+          categories={categories}
           suppliers={suppliers}
           sessionId={sessionId}
           product={productModal.mode === "edit" ? productModal.product : null}

@@ -8,10 +8,11 @@ export default async function AdminPage() {
   const auth = await requireAdmin(supabase);
   if (!auth.ok) redirect("/");
 
-  const [{ data: profiles }, { data: zones }, { data: suppliers }, { data: products }] = await Promise.all([
+  const [{ data: profiles }, { data: zones }, { data: suppliers }, catRes, { data: products }] = await Promise.all([
     supabase.from("profiles").select("id, full_name, email, role, status").order("created_at", { ascending: true }),
     supabase.from("zones").select("id, name").order("sort_order"),
     supabase.from("suppliers").select("id, name").order("name"),
+    supabase.from("categories").select("slug, name").order("sort_order"),
     supabase
       .from("products")
       .select("*")
@@ -72,6 +73,7 @@ export default async function AdminPage() {
     <AdminClient
       currentUserId={auth.user.id}
       zones={zones ?? []}
+      categories={catRes.data ?? []}
       initialSuppliers={suppliers ?? []}
       initialUsers={(profiles ?? []) as AdminUserDTO[]}
       initialProducts={mappedProducts}

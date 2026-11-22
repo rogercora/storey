@@ -50,6 +50,7 @@ export async function middleware(request: NextRequest) {
   }
   if (AUTH_PAGES.includes(path) || path === "/pending") return redirect("/");
   if (path.startsWith("/admin") && profile.role !== "admin") return redirect("/");
+  if (path.startsWith("/setup") && profile.role !== "admin" && profile.role !== "supervisor") return redirect("/");
 
   return response;
 }

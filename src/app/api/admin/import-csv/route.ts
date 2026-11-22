@@ -8,16 +8,6 @@ import { recordActivity } from "@/lib/audit";
 
 export const runtime = "nodejs";
 
-const CATEGORIES = new Set(["coffee", "dairy", "syrups", "packaging", "kitchen", "bakery", "drinks", "other"]);
-
-function parseBool(v: string | undefined, fallback: boolean): boolean {
-  if (!v) return fallback;
-  const s = v.trim().toLowerCase();
-  if (["true", "yes", "1", "y"].includes(s)) return true;
-  if (["false", "no", "0", "n"].includes(s)) return false;
-  return fallback;
-}
-
 const fail = (status: number, error: string) => NextResponse.json({ error }, { status });
 
 /**
@@ -48,13 +38,23 @@ export async function POST(request: NextRequest) {
 
   const admin = createAdminClient();
 
-  const [{ data: existingZones }, { data: existingSuppliers }] = await Promise.all([
+  const [{ data: existingZones }, { data: existingSuppliers }, { data: existingCategories }] = await Promise.all([
     admin.from("zones").select("id, name"),
     admin.from("suppliers").select("id, name"),
+    admin.from("categories").select("slug, name"),
   ]);
 
   const zoneMap = new Map<string, string>((existingZones ?? []).map((z) => [z.name.toLowerCase(), z.id as string]));
   const supplierMap = new Map<string, string>((existingSuppliers ?? []).map((s) => [s.name.toLowerCase(), s.id as string]));
+  const categorySlugs = new Set<string>((existingCategories ?? []).map((c) => c.slug as string));
+
+  function parseBool(v: string | undefined, fallback: boolean): boolean {
+    if (!v) return fallback;
+    const s = v.trim().toLowerCase();
+    if (["true", "yes", "1", "y"].includes(s)) return true;
+    if (["false", "no", "0", "n"].includes(s)) return false;
+    return fallback;
+  }
 
   const errors: string[] = [];
   const productPayloads: Array<Record<string, unknown>> = [];
@@ -123,8 +123,17 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const rawCategory = (row.category ?? "other").trim().toLowerCase();
-    const category = CATEGORIES.has(rawCategory) ? rawCategory : "other";
+    const rawCatName = (row.category ?? "other").trim();
+    const rawSlug = rawCatName.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 32) || "other";
+    let category = "other";
+    if (/^[a-z0-9_]{2,32}$/.test(rawSlug)) {
+      if (!categorySlugs.has(rawSlug)) {
+        const pretty = rawCatName.charAt(0).toUpperCase() + rawCatName.slice(1);
+        const { error: catErr } = await admin.from("categories").insert({ slug: rawSlug, name: pretty, sort_order: (categorySlugs.size + 1) * 10 });
+        if (!catErr) categorySlugs.add(rawSlug);
+      }
+      if (categorySlugs.has(rawSlug)) category = rawSlug;
+    }
     const factor = parseDecimal(row.conversion_factor) ?? 1;
     const minStock = Math.max(0, parseDecimal(row.min_stock) ?? 0);
     const targetStock = Math.max(0, parseDecimal(row.target_stock) ?? 0);

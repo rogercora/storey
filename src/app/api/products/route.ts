@@ -9,15 +9,13 @@ import type { StocktakeItemDTO } from "@/lib/sessions";
 
 export const runtime = "nodejs";
 
-const CATEGORIES = ["coffee", "dairy", "syrups", "packaging", "kitchen", "bakery", "drinks", "other"] as const;
-
 const createSchema = z.object({
   zone_id: z.string().uuid(),
   session_id: z.string().uuid().optional().nullable(),
   code_tag: z.string().min(2).max(12),
   name: z.string().trim().min(1).max(120),
   brand: z.string().trim().max(80).optional().nullable(),
-  category: z.enum(CATEGORIES).default("other"),
+  category: z.string().trim().toLowerCase().regex(/^[a-z0-9_]{2,32}$/).default("other"),
   supplier_id: z.string().uuid().optional().nullable(),
   new_supplier_name: z.string().trim().max(100).optional().nullable(),
   visual_hints: z.string().trim().max(300).optional().nullable(),

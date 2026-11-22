@@ -13,6 +13,11 @@ export interface ZoneOption {
   name: string;
 }
 
+export interface CategoryOption {
+  slug: string;
+  name: string;
+}
+
 export interface EditableProduct {
   id: string;
   zone_id: string;
@@ -34,12 +39,22 @@ export interface EditableProduct {
   unit_cost_gbp: number;
 }
 
-const CATEGORIES = ["coffee", "dairy", "syrups", "packaging", "kitchen", "bakery", "drinks", "other"] as const;
+const DEFAULT_CATEGORIES: CategoryOption[] = [
+  { slug: "coffee", name: "Coffee" },
+  { slug: "dairy", name: "Dairy" },
+  { slug: "syrups", name: "Syrups" },
+  { slug: "packaging", name: "Packaging" },
+  { slug: "kitchen", name: "Kitchen" },
+  { slug: "bakery", name: "Bakery" },
+  { slug: "drinks", name: "Drinks" },
+  { slug: "other", name: "Other" },
+];
 
 export function ProductFormModal({
   mode,
   zones,
   defaultZoneId,
+  categories,
   suppliers,
   sessionId,
   product,
@@ -49,12 +64,14 @@ export function ProductFormModal({
   mode: "create" | "edit";
   zones: ZoneOption[];
   defaultZoneId: string;
+  categories?: CategoryOption[];
   suppliers: SupplierOption[];
   sessionId?: string | null;
   product?: EditableProduct | null;
   onClose: () => void;
   onSaved: (res: { product: EditableProduct; supplier?: SupplierOption | null; sessionItem?: StocktakeItemDTO | null }) => void;
 }) {
+  const categoryList = categories && categories.length > 0 ? categories : DEFAULT_CATEGORIES;
   const [zoneId, setZoneId] = useState(product?.zone_id ?? defaultZoneId);
   const [codeTag, setCodeTag] = useState(product?.code_tag ?? "");
   const [name, setName] = useState(product?.name ?? "");
@@ -200,10 +217,10 @@ export function ProductFormModal({
             </label>
             <label className="text-xs font-bold uppercase">
               Category
-              <select className="input mt-1 capitalize" value={category} onChange={(e) => setCategory(e.target.value)}>
-                {CATEGORIES.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
+              <select className="input mt-1" value={category} onChange={(e) => setCategory(e.target.value)}>
+                {categoryList.map((c) => (
+                  <option key={c.slug} value={c.slug}>
+                    {c.name}
                   </option>
                 ))}
               </select>

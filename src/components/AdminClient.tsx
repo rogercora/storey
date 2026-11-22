@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { BrandHeader } from "@/components/Brand";
-import { ProductFormModal, type EditableProduct, type SupplierOption, type ZoneOption } from "@/components/ProductFormModal";
+import { ProductFormModal, type CategoryOption, type EditableProduct, type SupplierOption, type ZoneOption } from "@/components/ProductFormModal";
 import { formatGBP } from "@/lib/numbers";
 import { formatUkDateTime } from "@/lib/dates";
 
@@ -11,7 +11,7 @@ export interface AdminUserDTO {
   id: string;
   full_name: string;
   email: string;
-  role: "admin" | "staff";
+  role: "admin" | "supervisor" | "staff";
   status: "pending" | "active" | "suspended";
 }
 
@@ -35,6 +35,7 @@ export interface ActivityDTO {
 export function AdminClient({
   currentUserId,
   zones,
+  categories,
   initialSuppliers,
   initialUsers,
   initialProducts,
@@ -42,6 +43,7 @@ export function AdminClient({
 }: {
   currentUserId: string;
   zones: ZoneOption[];
+  categories?: CategoryOption[];
   initialSuppliers: SupplierOption[];
   initialUsers: AdminUserDTO[];
   initialProducts: AdminProductDTO[];
@@ -210,48 +212,44 @@ export function AdminClient({
                     {u.email} · <b className="uppercase text-ink">{u.role}</b>
                   </p>
 
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {u.status !== "active" && (
-                      <button
-                        type="button"
-                        className="btn-accent !min-h-10 flex-1"
-                        disabled={busyId === u.id}
-                        onClick={() => updateUser(u.id, { status: "active" })}
-                      >
-                        Approve
-                      </button>
-                    )}
-                    {u.status === "active" && u.id !== currentUserId && (
-                      <button
-                        type="button"
-                        className="btn-secondary !min-h-10 flex-1"
-                        disabled={busyId === u.id}
-                        onClick={() => updateUser(u.id, { status: "suspended" })}
-                      >
-                        Suspend
-                      </button>
-                    )}
-                    {u.role === "staff" ? (
-                      <button
-                        type="button"
-                        className="btn-secondary !min-h-10 flex-1"
-                        disabled={busyId === u.id}
-                        onClick={() => updateUser(u.id, { role: "admin" })}
-                      >
-                        Make admin
-                      </button>
-                    ) : (
-                      u.id !== currentUserId && (
+                  <div className="mt-3 space-y-2">
+                    <div className="flex flex-wrap gap-2">
+                      {u.status !== "active" && (
+                        <button
+                          type="button"
+                          className="btn-accent !min-h-10 flex-1"
+                          disabled={busyId === u.id}
+                          onClick={() => updateUser(u.id, { status: "active" })}
+                        >
+                          Approve
+                        </button>
+                      )}
+                      {u.status === "active" && u.id !== currentUserId && (
                         <button
                           type="button"
                           className="btn-secondary !min-h-10 flex-1"
                           disabled={busyId === u.id}
-                          onClick={() => updateUser(u.id, { role: "staff" })}
+                          onClick={() => updateUser(u.id, { status: "suspended" })}
                         >
-                          Set staff
+                          Suspend
                         </button>
-                      )
-                    )}
+                      )}
+                    </div>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {(["staff", "supervisor", "admin"] as const).map((r) => (
+                        <button
+                          key={r}
+                          type="button"
+                          disabled={busyId === u.id || (u.id === currentUserId && r !== u.role)}
+                          onClick={() => updateUser(u.id, { role: r })}
+                          className={`min-h-9 border border-ink text-xs font-bold uppercase ${
+                            u.role === r ? "bg-ink text-volt" : "bg-card text-ink"
+                          } disabled:opacity-40`}
+                        >
+                          {r}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </article>
               );
@@ -272,13 +270,18 @@ export function AdminClient({
               </div>
             </div>
 
-            <button
-              type="button"
-              className="btn-accent w-full"
-              onClick={() => setProductModal({ open: true, mode: "create" })}
-            >
-              + Add new product
-            </button>
+            <div className="grid grid-cols-1 gap-2">
+              <button
+                type="button"
+                className="btn-accent w-full"
+                onClick={() => setProductModal({ open: true, mode: "create" })}
+              >
+                + Add new product
+              </button>
+              <Link href="/setup" className="btn-secondary w-full">
+                Manage Zones, Categories &amp; Suppliers
+              </Link>
+            </div>
 
             <section className="space-y-2">
               <h2 className="text-2xl">Catalogue ({products.length})</h2>
@@ -393,6 +396,7 @@ export function AdminClient({
           mode={productModal.mode}
           zones={zones}
           defaultZoneId={productModal.mode === "edit" ? productModal.product.zone_id : zones[0]!.id}
+          categories={categories}
           suppliers={suppliers}
           product={productModal.mode === "edit" ? productModal.product : null}
           onClose={() => setProductModal({ open: false })}

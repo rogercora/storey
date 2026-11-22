@@ -3,6 +3,15 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 export type AuditAction =
   | "product_created"
   | "product_updated"
+  | "zone_created"
+  | "zone_updated"
+  | "zone_deleted"
+  | "category_created"
+  | "category_updated"
+  | "category_deleted"
+  | "supplier_created"
+  | "supplier_updated"
+  | "supplier_deleted"
   | "stocktake_started"
   | "stocktake_completed"
   | "ai_shelf_analysed"
@@ -18,7 +27,7 @@ export async function recordActivity(
   entry: {
     actorId: string;
     action: AuditAction;
-    entityType: "product" | "session" | "purchase_order" | "profile" | "system";
+    entityType: "product" | "zone" | "category" | "supplier" | "session" | "purchase_order" | "profile" | "system";
     entityId?: string | null;
     summary: string;
     meta?: Record<string, unknown>;

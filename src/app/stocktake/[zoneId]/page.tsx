@@ -8,10 +8,11 @@ export default async function StocktakeZonePage({ params }: { params: Promise<{ 
   const { zoneId } = await params;
   const supabase = await createClient();
 
-  const [{ data: zone }, { data: allZones }, { data: suppliers }, { count: productCount }, { data: sessions }] = await Promise.all([
+  const [{ data: zone }, { data: allZones }, { data: suppliers }, catRes, { count: productCount }, { data: sessions }] = await Promise.all([
     supabase.from("zones").select("id, name, description").eq("id", zoneId).maybeSingle(),
     supabase.from("zones").select("id, name").order("sort_order"),
     supabase.from("suppliers").select("id, name").order("name"),
+    supabase.from("categories").select("slug, name").order("sort_order"),
     supabase.from("products").select("id", { count: "exact", head: true }).eq("zone_id", zoneId).eq("active", true),
     supabase
       .from("inventory_sessions")
@@ -40,6 +41,7 @@ export default async function StocktakeZonePage({ params }: { params: Promise<{ 
     <StocktakeClient
       zone={zone}
       zones={allZones ?? []}
+      categories={catRes.data ?? []}
       initialSuppliers={suppliers ?? []}
       initialProductCount={productCount ?? 0}
       initialSessionId={(todaysDraft?.id as string) ?? null}

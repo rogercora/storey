@@ -9,7 +9,7 @@ export const runtime = "nodejs";
 const patchSchema = z.object({
   user_id: z.string().uuid(),
   status: z.enum(["pending", "active", "suspended"]).optional(),
-  role: z.enum(["admin", "staff"]).optional(),
+  role: z.enum(["admin", "supervisor", "staff"]).optional(),
 });
 
 const fail = (status: number, error: string) => NextResponse.json({ error }, { status });

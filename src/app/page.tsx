@@ -56,6 +56,11 @@ export default async function DashboardPage() {
           <Link href="/purchase-orders" className="btn-accent w-full">
             Purchase Orders &amp; Exports
           </Link>
+          {(profile?.role === "admin" || profile?.role === "supervisor") && (
+            <Link href="/setup" className="btn-secondary w-full">
+              Setup · Zones, Categories &amp; Suppliers
+            </Link>
+          )}
           {profile?.role === "admin" && (
             <Link href="/admin" className="btn-primary w-full">
               Admin · Team &amp; Inventory
