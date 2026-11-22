@@ -3,8 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { SignOutButton } from "@/components/SignOutButton";
 import { BrandHeader } from "@/components/Brand";
 import { ZoneCard, type ZoneState } from "@/components/ZoneCard";
-
-const londonDay = (d: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London" }).format(d);
+import { londonDay } from "@/lib/dates";
 
 export default async function DashboardPage() {
   const supabase = await createClient();
@@ -39,9 +38,16 @@ export default async function DashboardPage() {
       </section>
 
       <main className="mx-auto max-w-md px-5 pb-16 pt-6">
-        {profile?.role === "admin" && (
-          <Link href="/admin" className="btn-primary w-full">Admin · Team &amp; Inventory</Link>
-        )}
+        <div className="space-y-3">
+          <Link href="/purchase-orders" className="btn-accent w-full">
+            Purchase Orders &amp; Exports
+          </Link>
+          {profile?.role === "admin" && (
+            <Link href="/admin" className="btn-primary w-full">
+              Admin · Team &amp; Inventory
+            </Link>
+          )}
+        </div>
 
         <h2 className="mb-3 mt-8 text-2xl">Choose a zone</h2>
         <ul className="space-y-3">

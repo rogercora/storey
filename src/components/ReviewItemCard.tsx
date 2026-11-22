@@ -7,6 +7,7 @@ import { formatGBP, normaliseFraction, roundTo } from "@/lib/numbers";
 export type ReviewStatus = "confirmed" | "needs_review" | "unseen";
 
 export interface ReviewItemProps {
+  itemId?: string;
   code: string;
   name: string;
   countUnit: string;
@@ -17,7 +18,8 @@ export interface ReviewItemProps {
   confidence: number | null;
   allowOpenFraction: boolean;
   restock: RestockInput;
-  initial: { closed: number; open: number; hidden: number };
+  initial: { closed: number; open: number; hidden: number; reviewed?: boolean };
+  onChange?: (val: { closed: number; open: number; hidden: number; confirmed: boolean }) => void;
 }
 
 const REASON_LABEL: Record<string, string> = {
@@ -49,16 +51,25 @@ function Stepper({ label, value, onChange }: { label: string; value: number; onC
 }
 
 export function ReviewItemCard(props: ReviewItemProps) {
-  const { code, name, countUnit, orderUnit, status, reasons, evidence, confidence, allowOpenFraction, restock } = props;
+  const { code, name, countUnit, orderUnit, status, reasons, evidence, confidence, allowOpenFraction, restock, onChange } = props;
   const [closed, setClosed] = useState(props.initial.closed);
   const [hidden, setHidden] = useState(props.initial.hidden);
   const [openText, setOpenText] = useState(props.initial.open ? String(props.initial.open) : "0");
-  const [expanded, setExpanded] = useState(status === "needs_review");
-  const [confirmed, setConfirmed] = useState(status === "confirmed");
+  const [expanded, setExpanded] = useState(status === "needs_review" && !props.initial.reviewed);
+  const [confirmed, setConfirmed] = useState(status === "confirmed" || Boolean(props.initial.reviewed));
 
   const open = normaliseFraction(openText); // accepts "0,7" and "0.7"
   const total = roundTo(closed + open + hidden, 3);
   const r = computeRestock(restock, total);
+
+  function notify(nextClosed: number, nextOpenText: string, nextHidden: number, nextConfirmed: boolean) {
+    onChange?.({
+      closed: nextClosed,
+      open: allowOpenFraction ? normaliseFraction(nextOpenText) : 0,
+      hidden: nextHidden,
+      confirmed: nextConfirmed,
+    });
+  }
 
   const bar =
     status === "needs_review" && !confirmed ? "bg-volt text-ink" : status === "unseen" && !confirmed ? "bg-ink/15 text-ink" : "bg-brand text-white";
@@ -103,8 +114,22 @@ export function ReviewItemCard(props: ReviewItemProps) {
         {expanded ? (
           <div className="mt-4 space-y-4">
             <div className="grid grid-cols-2 gap-3">
-              <Stepper label={`Closed ${countUnit}s`} value={closed} onChange={setClosed} />
-              <Stepper label="Hidden / back row" value={hidden} onChange={setHidden} />
+              <Stepper
+                label={`Closed ${countUnit}s`}
+                value={closed}
+                onChange={(n) => {
+                  setClosed(n);
+                  notify(n, openText, hidden, confirmed);
+                }}
+              />
+              <Stepper
+                label="Hidden / back row"
+                value={hidden}
+                onChange={(n) => {
+                  setHidden(n);
+                  notify(closed, openText, n, confirmed);
+                }}
+              />
             </div>
 
             {allowOpenFraction && (
@@ -115,7 +140,10 @@ export function ReviewItemCard(props: ReviewItemProps) {
                     <button
                       key={s}
                       type="button"
-                      onClick={() => setOpenText(s)}
+                      onClick={() => {
+                        setOpenText(s);
+                        notify(closed, s, hidden, confirmed);
+                      }}
                       className={`min-h-11 min-w-14 border-2 border-ink px-3 font-display text-xl ${open === Number(s) ? "bg-ink text-volt" : "bg-card"}`}
                     >
                       {s}
@@ -126,7 +154,10 @@ export function ReviewItemCard(props: ReviewItemProps) {
                     inputMode="decimal"
                     aria-label="Open box fraction remaining"
                     value={openText}
-                    onChange={(e) => setOpenText(e.target.value)}
+                    onChange={(e) => {
+                      setOpenText(e.target.value);
+                      notify(closed, e.target.value, hidden, confirmed);
+                    }}
                   />
                 </div>
               </div>
@@ -138,6 +169,7 @@ export function ReviewItemCard(props: ReviewItemProps) {
               onClick={() => {
                 setConfirmed(true);
                 setExpanded(false);
+                notify(closed, openText, hidden, true);
               }}
             >
               Confirm
