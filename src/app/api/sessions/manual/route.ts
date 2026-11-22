@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireActiveUser } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { computeRestock } from "@/lib/restock";
+import { recordActivity } from "@/lib/audit";
 
 export const runtime = "nodejs";
 
@@ -58,6 +59,15 @@ export async function POST(request: NextRequest) {
 
   const { error: iErr } = await supabase.from("inventory_items").insert(rows);
   if (iErr) return fail(500, "Could not create stocktake items.");
+
+  await recordActivity(supabase, {
+    actorId: auth.user.id,
+    action: "stocktake_started",
+    entityType: "session",
+    entityId: sess.id as string,
+    summary: `Started manual count in ${zone.name}`,
+    meta: { zone_id, manual: true },
+  });
 
   return NextResponse.json({ session_id: sess.id });
 }

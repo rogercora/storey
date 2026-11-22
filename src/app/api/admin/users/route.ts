@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
+import { recordActivity } from "@/lib/audit";
 
 export const runtime = "nodejs";
 
@@ -38,6 +39,14 @@ export async function PATCH(request: NextRequest) {
     // Surface trigger guard message cleanly (e.g. "You cannot demote or suspend the last active admin")
     return fail(400, error.message);
   }
+
+  await recordActivity(supabase, {
+    actorId: auth.user.id,
+    action: "user_updated",
+    entityType: "profile",
+    entityId: parsed.data.user_id,
+    summary: `Updated user access (${Object.entries(update).map(([k, v]) => `${k}: ${v}`).join(", ")})`,
+  });
 
   return NextResponse.json({ ok: true });
 }

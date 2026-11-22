@@ -5,7 +5,11 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BrandHeader } from "@/components/Brand";
 import { ReviewItemCard } from "@/components/ReviewItemCard";
+import { ProductFormModal, type EditableProduct, type SupplierOption, type ZoneOption } from "@/components/ProductFormModal";
 import { compressPhoto, getQueuedForZone, queuePhotos, removeQueuedBatch, type QueuedBatch } from "@/lib/offline-queue";
+import { formatUkDateTime } from "@/lib/dates";
+import { formatGBP } from "@/lib/numbers";
+import { computeRestock } from "@/lib/restock";
 import type { StocktakeItemDTO } from "@/lib/sessions";
 
 interface PhotoDraft {
@@ -32,22 +36,43 @@ const QUALITY_LABELS: Record<string, string> = {
 
 export function StocktakeClient({
   zone,
-  productCount,
+  zones,
+  initialSuppliers,
+  initialProductCount,
   initialSessionId,
+  initialSessionOwner,
+  initialSessionCreatedAt,
+  lastCompleted,
   initialItems,
   initialMeta,
 }: {
   zone: { id: string; name: string; description: string | null };
-  productCount: number;
+  zones: ZoneOption[];
+  initialSuppliers: SupplierOption[];
+  initialProductCount: number;
   initialSessionId: string | null;
+  initialSessionOwner: string | null;
+  initialSessionCreatedAt: string | null;
+  lastCompleted: { by: string; at: string } | null;
   initialItems: StocktakeItemDTO[];
   initialMeta: { image_quality_issues?: string[]; unmatched_tags_seen?: string[] } | null;
 }) {
   const router = useRouter();
   const [sessionId, setSessionId] = useState<string | null>(initialSessionId);
+  const [sessionOwner, setSessionOwner] = useState<string | null>(initialSessionOwner);
+  const [sessionCreatedAt, setSessionCreatedAt] = useState<string | null>(initialSessionCreatedAt);
   const [items, setItems] = useState<StocktakeItemDTO[]>(initialItems);
+  const [productCount, setProductCount] = useState(initialProductCount);
+  const [suppliers, setSuppliers] = useState<SupplierOption[]>(initialSuppliers);
   const [meta, setMeta] = useState(initialMeta);
   const [mode, setMode] = useState<"capture" | "review">(initialItems.length > 0 ? "review" : "capture");
+
+  // Modal state for adding/editing a product inside the zone
+  const [productModal, setProductModal] = useState<
+    | { open: false }
+    | { open: true; mode: "create" }
+    | { open: true; mode: "edit"; product: EditableProduct }
+  >({ open: false });
 
   // Camera & photo capture state
   const [photos, setPhotos] = useState<PhotoDraft[]>([]);
@@ -60,23 +85,27 @@ export function StocktakeClient({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [editsVersion, setEditsVersion] = useState(0);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const editsRef = useRef<Map<string, ItemPatch>>(new Map());
 
-  // Seed edits map when items load
+  // Keep edits map in sync with items without clobbering existing edits
   useEffect(() => {
-    const map = new Map<string, ItemPatch>();
+    const next = new Map(editsRef.current);
     for (const it of items) {
-      map.set(it.item_id, {
-        closed_units: it.final.closed_units,
-        open_fraction: it.final.open_fraction,
-        hidden_back_units: it.final.hidden_back_units,
-        reviewed: it.reviewed || it.status === "confirmed",
-      });
+      if (!next.has(it.item_id)) {
+        next.set(it.item_id, {
+          closed_units: it.final.closed_units,
+          open_fraction: it.final.open_fraction,
+          hidden_back_units: it.final.hidden_back_units,
+          reviewed: it.reviewed || it.status === "confirmed",
+        });
+      }
     }
-    editsRef.current = map;
+    editsRef.current = next;
+    setEditsVersion((v) => v + 1);
   }, [items]);
 
   const stopCamera = useCallback(() => {
@@ -94,7 +123,7 @@ export function StocktakeClient({
       const q = await getQueuedForZone(zone.id);
       setQueuedBatches(q);
     } catch {
-      // IndexedDB unavailable in private browsing
+      // IndexedDB unavailable
     }
   }, [zone.id]);
 
@@ -119,6 +148,7 @@ export function StocktakeClient({
         return false;
       }
 
+      editsRef.current = new Map();
       setSessionId(data.session_id);
       setItems(loaded.items ?? []);
       setMeta({
@@ -270,7 +300,6 @@ export function StocktakeClient({
         setPhotos([]);
       }
     } catch {
-      // Network dropped mid-request -> save to offline queue
       await queuePhotos({
         zoneId: zone.id,
         sessionId: sessionId ?? undefined,
@@ -301,7 +330,10 @@ export function StocktakeClient({
       }
       const loadedRes = await fetch(`/api/sessions/${data.session_id}`);
       const loaded = await loadedRes.json();
+      editsRef.current = new Map();
       setSessionId(data.session_id);
+      setSessionCreatedAt(new Date().toISOString());
+      setSessionOwner("You");
       setItems(loaded.items ?? []);
       setMode("review");
     } finally {
@@ -349,6 +381,78 @@ export function StocktakeClient({
   const confirmedItems = items.filter((i) => i.status === "confirmed");
   const unseenItems = items.filter((i) => i.status === "unseen");
 
+  // Running total estimated restock value in GBP (£)
+  void editsVersion;
+  const estOrderTotal = items.reduce((sum, it) => {
+    const patch = editsRef.current.get(it.item_id);
+    const closed = patch?.closed_units ?? it.final.closed_units;
+    const open = patch?.open_fraction ?? it.final.open_fraction;
+    const hidden = patch?.hidden_back_units ?? it.final.hidden_back_units;
+    return sum + computeRestock(it.restock, closed + open + hidden).estimated_cost_gbp;
+  }, 0);
+
+  function openEditModal(it: StocktakeItemDTO) {
+    setProductModal({
+      open: true,
+      mode: "edit",
+      product: {
+        id: it.product_id,
+        zone_id: zone.id,
+        supplier_id: it.supplier_id,
+        code_tag: it.code_tag,
+        name: it.name,
+        brand: it.brand,
+        category: it.category,
+        visual_hints: it.visual_hints,
+        has_handwritten_tag: it.has_handwritten_tag,
+        count_unit: it.count_unit,
+        order_unit: it.order_unit,
+        conversion_factor: it.restock.conversion_factor,
+        allow_open_fraction: it.allow_open_fraction,
+        min_stock: it.restock.min_stock,
+        target_stock: it.restock.target_stock,
+        safety_margin: it.restock.safety_margin,
+        round_up_order: it.restock.round_up_order,
+        unit_cost_gbp: it.restock.unit_cost_gbp,
+      },
+    });
+  }
+
+  function renderCard(it: StocktakeItemDTO) {
+    return (
+      <ReviewItemCard
+        key={`${it.item_id}-${it.restock.unit_cost_gbp}-${it.restock.target_stock}`}
+        itemId={it.item_id}
+        code={it.code_tag}
+        name={it.name}
+        countUnit={it.count_unit}
+        orderUnit={it.order_unit}
+        status={it.status}
+        reasons={it.reasons}
+        evidence={it.evidence}
+        confidence={it.confidence}
+        allowOpenFraction={it.allow_open_fraction}
+        restock={it.restock}
+        initial={{
+          closed: editsRef.current.get(it.item_id)?.closed_units ?? it.final.closed_units,
+          open: editsRef.current.get(it.item_id)?.open_fraction ?? it.final.open_fraction,
+          hidden: editsRef.current.get(it.item_id)?.hidden_back_units ?? it.final.hidden_back_units,
+          reviewed: editsRef.current.get(it.item_id)?.reviewed ?? it.reviewed,
+        }}
+        onChange={(v) => {
+          editsRef.current.set(it.item_id, {
+            closed_units: v.closed,
+            open_fraction: v.open,
+            hidden_back_units: v.hidden,
+            reviewed: v.confirmed,
+          });
+          setEditsVersion((n) => n + 1);
+        }}
+        onEditProduct={() => openEditModal(it)}
+      />
+    );
+  }
+
   return (
     <div className="min-h-dvh pb-24">
       <BrandHeader
@@ -364,6 +468,18 @@ export function StocktakeClient({
           {productCount} active products
         </p>
         <h1 className="mt-1 text-4xl text-volt">{zone.name}</h1>
+
+        {sessionId && sessionOwner && sessionCreatedAt && (
+          <p className="mt-2 text-xs font-semibold text-white/90">
+            Draft started by {sessionOwner} · {formatUkDateTime(sessionCreatedAt)}
+          </p>
+        )}
+        {!sessionId && lastCompleted && (
+          <p className="mt-2 text-xs font-semibold text-white/90">
+            Last completed by {lastCompleted.by} · {formatUkDateTime(lastCompleted.at)}
+          </p>
+        )}
+
         {mode === "review" && (
           <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold">
             <span className="bg-volt px-2.5 py-1 text-ink">{reviewItems.length} to check</span>
@@ -400,7 +516,16 @@ export function StocktakeClient({
 
         {mode === "capture" ? (
           <div>
-            <h2 className="text-3xl">Photograph the shelf</h2>
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-3xl">Photograph the shelf</h2>
+              <button
+                type="button"
+                className="chip bg-ink px-3 py-1.5 text-volt"
+                onClick={() => setProductModal({ open: true, mode: "create" })}
+              >
+                + Add product
+              </button>
+            </div>
             <p className="mt-1 text-sm text-ink-soft">
               Keep handwritten box codes (e.g. CP12, CF01) facing the camera. Add up to 4 angles.
             </p>
@@ -486,7 +611,7 @@ export function StocktakeClient({
                 </button>
               )}
               {!sessionId && (
-                <button type="button" className="text-sm font-bold underline" onClick={startManualCount} disabled={busy}>
+                <button type="button" className="btn-primary w-full" onClick={startManualCount} disabled={busy}>
                   Count manually without a photo
                 </button>
               )}
@@ -512,119 +637,46 @@ export function StocktakeClient({
               </div>
             )}
 
-            <button type="button" className="btn-secondary w-full" onClick={() => setMode("capture")}>
-              + Add another photo angle
-            </button>
+            <div className="grid grid-cols-2 gap-2">
+              <button type="button" className="btn-secondary !px-3 text-base" onClick={() => setMode("capture")}>
+                + Add photo
+              </button>
+              <button
+                type="button"
+                className="btn-primary !px-3 text-base"
+                onClick={() => setProductModal({ open: true, mode: "create" })}
+              >
+                + Add product
+              </button>
+            </div>
 
             {reviewItems.length > 0 && (
               <section className="space-y-3">
                 <h2 className="text-2xl">Check these first</h2>
-                {reviewItems.map((it) => (
-                  <ReviewItemCard
-                    key={it.item_id}
-                    itemId={it.item_id}
-                    code={it.code_tag}
-                    name={it.name}
-                    countUnit={it.count_unit}
-                    orderUnit={it.order_unit}
-                    status={it.status}
-                    reasons={it.reasons}
-                    evidence={it.evidence}
-                    confidence={it.confidence}
-                    allowOpenFraction={it.allow_open_fraction}
-                    restock={it.restock}
-                    initial={{
-                      closed: it.final.closed_units,
-                      open: it.final.open_fraction,
-                      hidden: it.final.hidden_back_units,
-                      reviewed: it.reviewed,
-                    }}
-                    onChange={(v) =>
-                      editsRef.current.set(it.item_id, {
-                        closed_units: v.closed,
-                        open_fraction: v.open,
-                        hidden_back_units: v.hidden,
-                        reviewed: v.confirmed,
-                      })
-                    }
-                  />
-                ))}
+                {reviewItems.map(renderCard)}
               </section>
             )}
 
             {confirmedItems.length > 0 && (
               <section className="space-y-3 pt-2">
                 <h2 className="text-2xl">Confirmed</h2>
-                {confirmedItems.map((it) => (
-                  <ReviewItemCard
-                    key={it.item_id}
-                    itemId={it.item_id}
-                    code={it.code_tag}
-                    name={it.name}
-                    countUnit={it.count_unit}
-                    orderUnit={it.order_unit}
-                    status={it.status}
-                    reasons={it.reasons}
-                    evidence={it.evidence}
-                    confidence={it.confidence}
-                    allowOpenFraction={it.allow_open_fraction}
-                    restock={it.restock}
-                    initial={{
-                      closed: it.final.closed_units,
-                      open: it.final.open_fraction,
-                      hidden: it.final.hidden_back_units,
-                      reviewed: it.reviewed,
-                    }}
-                    onChange={(v) =>
-                      editsRef.current.set(it.item_id, {
-                        closed_units: v.closed,
-                        open_fraction: v.open,
-                        hidden_back_units: v.hidden,
-                        reviewed: v.confirmed,
-                      })
-                    }
-                  />
-                ))}
+                {confirmedItems.map(renderCard)}
               </section>
             )}
 
             {unseenItems.length > 0 && (
               <section className="space-y-3 pt-2">
                 <h2 className="text-2xl">Not seen in photo (0)</h2>
-                {unseenItems.map((it) => (
-                  <ReviewItemCard
-                    key={it.item_id}
-                    itemId={it.item_id}
-                    code={it.code_tag}
-                    name={it.name}
-                    countUnit={it.count_unit}
-                    orderUnit={it.order_unit}
-                    status={it.status}
-                    reasons={it.reasons}
-                    evidence={it.evidence}
-                    confidence={it.confidence}
-                    allowOpenFraction={it.allow_open_fraction}
-                    restock={it.restock}
-                    initial={{
-                      closed: it.final.closed_units,
-                      open: it.final.open_fraction,
-                      hidden: it.final.hidden_back_units,
-                      reviewed: it.reviewed,
-                    }}
-                    onChange={(v) =>
-                      editsRef.current.set(it.item_id, {
-                        closed_units: v.closed,
-                        open_fraction: v.open,
-                        hidden_back_units: v.hidden,
-                        reviewed: v.confirmed,
-                      })
-                    }
-                  />
-                ))}
+                {unseenItems.map(renderCard)}
               </section>
             )}
 
-            <div className="grid grid-cols-2 gap-3 pt-4">
+            <div className="border-2 border-ink bg-card p-3 text-center">
+              <p className="text-xs font-bold uppercase text-ink-soft">Estimated restock value for {zone.name}</p>
+              <p className="font-display text-3xl text-brand">{formatGBP(estOrderTotal)}</p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 pt-1">
               <button type="button" className="btn-secondary" onClick={() => saveSession(false)} disabled={saving}>
                 Save draft
               </button>
@@ -635,7 +687,60 @@ export function StocktakeClient({
           </div>
         )}
       </main>
+
+      {productModal.open && (
+        <ProductFormModal
+          mode={productModal.mode}
+          zones={zones}
+          defaultZoneId={zone.id}
+          suppliers={suppliers}
+          sessionId={sessionId}
+          product={productModal.mode === "edit" ? productModal.product : null}
+          onClose={() => setProductModal({ open: false })}
+          onSaved={({ product, supplier, sessionItem }) => {
+            if (supplier && !suppliers.some((s) => s.id === supplier.id)) {
+              setSuppliers((prev) => [...prev, supplier].sort((a, b) => a.name.localeCompare(b.name)));
+            }
+            if (productModal.mode === "create") {
+              if (product.zone_id === zone.id) setProductCount((c) => c + 1);
+              if (sessionItem) {
+                setItems((prev) => [sessionItem, ...prev]);
+                setMode("review");
+              }
+              setNotice(`Added [${product.code_tag}] ${product.name} (${formatGBP(Number(product.unit_cost_gbp))}).`);
+            } else {
+              setItems((prev) =>
+                prev.map((it) =>
+                  it.product_id === product.id
+                    ? {
+                        ...it,
+                        name: product.name,
+                        brand: product.brand,
+                        category: product.category,
+                        supplier_id: product.supplier_id,
+                        visual_hints: product.visual_hints,
+                        has_handwritten_tag: product.has_handwritten_tag,
+                        count_unit: product.count_unit,
+                        order_unit: product.order_unit,
+                        allow_open_fraction: product.allow_open_fraction,
+                        restock: {
+                          target_stock: Number(product.target_stock),
+                          safety_margin: Number(product.safety_margin),
+                          min_stock: Number(product.min_stock),
+                          conversion_factor: Number(product.conversion_factor),
+                          round_up_order: Boolean(product.round_up_order),
+                          unit_cost_gbp: Number(product.unit_cost_gbp),
+                        },
+                      }
+                    : it,
+                ),
+              );
+              setNotice(`Updated [${product.code_tag}] ${product.name} (${formatGBP(Number(product.unit_cost_gbp))}).`);
+            }
+            setProductModal({ open: false });
+          }}
+        />
+      )}
     </div>
   );
 }
-

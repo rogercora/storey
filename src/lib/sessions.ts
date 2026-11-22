@@ -8,6 +8,10 @@ export interface StocktakeItemDTO {
   code_tag: string;
   name: string;
   brand: string | null;
+  category: string;
+  supplier_id: string | null;
+  visual_hints: string | null;
+  has_handwritten_tag: boolean;
   count_unit: string;
   order_unit: string;
   allow_open_fraction: boolean;
@@ -28,7 +32,7 @@ export async function loadSessionItems(supabase: SupabaseClient, sessionId: stri
   const { data, error } = await supabase
     .from("inventory_items")
     .select(
-      "id, product_id, ai_confidence, ai_evidence, ai_review_reasons, final_closed_units, final_open_fraction, hidden_back_units, reviewed, products(code_tag, name, brand, count_unit, order_unit, allow_open_fraction, target_stock, safety_margin, min_stock, conversion_factor, round_up_order, unit_cost_gbp)",
+      "id, product_id, ai_confidence, ai_evidence, ai_review_reasons, final_closed_units, final_open_fraction, hidden_back_units, reviewed, products(code_tag, name, brand, category, supplier_id, visual_hints, has_handwritten_tag, count_unit, order_unit, allow_open_fraction, target_stock, safety_margin, min_stock, conversion_factor, round_up_order, unit_cost_gbp)",
     )
     .eq("session_id", sessionId);
 
@@ -42,6 +46,10 @@ export async function loadSessionItems(supabase: SupabaseClient, sessionId: stri
         code_tag: string;
         name: string;
         brand: string | null;
+        category: string;
+        supplier_id: string | null;
+        visual_hints: string | null;
+        has_handwritten_tag: boolean;
         count_unit: string;
         order_unit: string;
         allow_open_fraction: boolean;
@@ -69,6 +77,10 @@ export async function loadSessionItems(supabase: SupabaseClient, sessionId: stri
         code_tag: p.code_tag,
         name: p.name,
         brand: p.brand,
+        category: p.category ?? "other",
+        supplier_id: p.supplier_id ?? null,
+        visual_hints: p.visual_hints ?? null,
+        has_handwritten_tag: Boolean(p.has_handwritten_tag),
         count_unit: p.count_unit,
         order_unit: p.order_unit,
         allow_open_fraction: p.allow_open_fraction,
@@ -95,4 +107,3 @@ export async function loadSessionItems(supabase: SupabaseClient, sessionId: stri
     .filter((x): x is StocktakeItemDTO => x !== null)
     .sort((a, b) => order[a.status] - order[b.status] || a.code_tag.localeCompare(b.code_tag));
 }
-

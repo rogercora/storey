@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { parseCsvRecords } from "@/lib/csv";
 import { parseDecimal } from "@/lib/numbers";
+import { recordActivity } from "@/lib/audit";
 
 export const runtime = "nodejs";
 
@@ -182,6 +183,13 @@ export async function POST(request: NextRequest) {
       else imported += inserted?.length ?? toInsert.length;
     }
   }
+
+  await recordActivity(supabase, {
+    actorId: auth.user.id,
+    action: "csv_imported",
+    entityType: "system",
+    summary: `Imported ${imported} of ${rows.length} product(s) via CSV`,
+  });
 
   return NextResponse.json({
     ok: errors.length === 0,

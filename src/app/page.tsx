@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { SignOutButton } from "@/components/SignOutButton";
 import { BrandHeader } from "@/components/Brand";
 import { ZoneCard, type ZoneState } from "@/components/ZoneCard";
-import { londonDay } from "@/lib/dates";
+import { formatUkDateTime, londonDay } from "@/lib/dates";
 
 export default async function DashboardPage() {
   const supabase = await createClient();
@@ -16,17 +16,31 @@ export default async function DashboardPage() {
     supabase.from("zones").select("id, name, description").order("sort_order"),
     supabase
       .from("inventory_sessions")
-      .select("zone_id, status, created_at")
-      .gte("created_at", new Date(Date.now() - 36 * 3600_000).toISOString()),
+      .select("zone_id, status, created_at, completed_at, profiles(full_name)")
+      .gte("created_at", new Date(Date.now() - 36 * 3600_000).toISOString())
+      .order("created_at", { ascending: false }),
   ]);
 
   // "Today" is a UK calendar day, not a UTC one.
   const today = londonDay(new Date());
   const todays = (sessions ?? []).filter((s) => londonDay(new Date(s.created_at)) === today);
-  const statusFor = (zoneId: string): ZoneState => {
+  const infoFor = (zoneId: string): { state: ZoneState; meta: string | null } => {
     const mine = todays.filter((s) => s.zone_id === zoneId);
-    if (mine.some((s) => s.status === "completed")) return "done";
-    return mine.length ? "in_progress" : "todo";
+    const completed = mine.find((s) => s.status === "completed");
+    if (completed) {
+      const p = (Array.isArray(completed.profiles) ? completed.profiles[0] : completed.profiles) as { full_name?: string } | null;
+      const who = p?.full_name || "Team";
+      const when = formatUkDateTime((completed.completed_at as string) || (completed.created_at as string));
+      return { state: "done", meta: `Counted by ${who} · ${when}` };
+    }
+    const draft = mine[0];
+    if (draft) {
+      const p = (Array.isArray(draft.profiles) ? draft.profiles[0] : draft.profiles) as { full_name?: string } | null;
+      const who = p?.full_name || "Team";
+      const when = formatUkDateTime(draft.created_at as string);
+      return { state: "in_progress", meta: `Started by ${who} · ${when}` };
+    }
+    return { state: "todo", meta: null };
   };
 
   return (
@@ -51,11 +65,20 @@ export default async function DashboardPage() {
 
         <h2 className="mb-3 mt-8 text-2xl">Choose a zone</h2>
         <ul className="space-y-3">
-          {(zones ?? []).map((z) => (
-            <li key={z.id}>
-              <ZoneCard href={`/stocktake/${z.id}`} name={z.name} description={z.description} state={statusFor(z.id)} />
-            </li>
-          ))}
+          {(zones ?? []).map((z) => {
+            const info = infoFor(z.id);
+            return (
+              <li key={z.id}>
+                <ZoneCard
+                  href={`/stocktake/${z.id}`}
+                  name={z.name}
+                  description={z.description}
+                  state={info.state}
+                  meta={info.meta}
+                />
+              </li>
+            );
+          })}
         </ul>
       </main>
     </div>

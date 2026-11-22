@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { computeRestock } from "@/lib/restock";
 import { clamp, roundTo } from "@/lib/numbers";
 import { loadSessionItems } from "@/lib/sessions";
+import { recordActivity } from "@/lib/audit";
 
 export const runtime = "nodejs";
 
@@ -69,7 +70,7 @@ export async function PATCH(request: NextRequest, ctx: { params: Promise<{ id: s
 
   const { data: session } = await supabase
     .from("inventory_sessions")
-    .select("id, status, zone_id")
+    .select("id, status, zone_id, zones(name)")
     .eq("id", sessionId)
     .maybeSingle();
 
@@ -139,6 +140,17 @@ export async function PATCH(request: NextRequest, ctx: { params: Promise<{ id: s
       console.error("[sessions PATCH] complete failed", compErr.message);
       return fail(500, "Could not complete the stocktake.");
     }
+
+    const zObj = Array.isArray(session.zones) ? session.zones[0] : session.zones;
+    const zoneName = (zObj as { name?: string } | null)?.name ?? "Zone";
+    await recordActivity(supabase, {
+      actorId: auth.user.id,
+      action: "stocktake_completed",
+      entityType: "session",
+      entityId: sessionId,
+      summary: `Completed stocktake for ${zoneName} (${parsed.data.items.length} item(s) saved)`,
+      meta: { zone_id: session.zone_id, items_saved: parsed.data.items.length },
+    });
   }
 
   return NextResponse.json({ ok: true, session_id: sessionId, status: parsed.data.complete ? "completed" : "draft" });

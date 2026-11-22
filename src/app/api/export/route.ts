@@ -75,6 +75,7 @@ export async function GET(request: NextRequest) {
     "Shortfall (Count Units)",
     "Suggested Order Qty",
     "Order Unit",
+    "Unit Cost (GBP)",
     "Est. Cost (GBP)",
     "Counted By",
     "Status",
@@ -122,6 +123,7 @@ export async function GET(request: NextRequest) {
         restock.needed_count_units,
         restock.order_qty,
         p.order_unit,
+        Number(p.unit_cost_gbp),
         restock.estimated_cost_gbp,
         (profObj as { full_name?: string } | null)?.full_name ?? "",
         sess?.status === "completed" ? "Completed" : "Draft",
@@ -151,6 +153,7 @@ export async function GET(request: NextRequest) {
   stockSheet.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF000000" } };
   for (const row of stockData) stockSheet.addRow(row);
   stockSheet.getColumn(17).numFmt = "£#,##0.00";
+  stockSheet.getColumn(18).numFmt = "£#,##0.00";
   stockSheet.columns.forEach((col) => {
     col.width = 16;
   });

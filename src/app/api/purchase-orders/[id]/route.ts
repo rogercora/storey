@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { requireActiveUser } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
+import { recordActivity } from "@/lib/audit";
 
 export const runtime = "nodejs";
 
@@ -45,6 +46,14 @@ export async function PATCH(request: NextRequest, ctx: { params: Promise<{ id: s
     console.error("[purchase-orders PATCH] failed", error.message);
     return fail(500, "Could not update purchase order.");
   }
+
+  await recordActivity(supabase, {
+    actorId: auth.user.id,
+    action: parsed.data.status === "approved" ? "po_approved" : "po_sent",
+    entityType: "purchase_order",
+    entityId: id,
+    summary: `Marked purchase order as ${parsed.data.status}`,
+  });
 
   return NextResponse.json({ ok: true, status: parsed.data.status });
 }

@@ -20,6 +20,7 @@ export interface ReviewItemProps {
   restock: RestockInput;
   initial: { closed: number; open: number; hidden: number; reviewed?: boolean };
   onChange?: (val: { closed: number; open: number; hidden: number; confirmed: boolean }) => void;
+  onEditProduct?: () => void;
 }
 
 const REASON_LABEL: Record<string, string> = {
@@ -51,7 +52,7 @@ function Stepper({ label, value, onChange }: { label: string; value: number; onC
 }
 
 export function ReviewItemCard(props: ReviewItemProps) {
-  const { code, name, countUnit, orderUnit, status, reasons, evidence, confidence, allowOpenFraction, restock, onChange } = props;
+  const { code, name, countUnit, orderUnit, status, reasons, evidence, confidence, allowOpenFraction, restock, onChange, onEditProduct } = props;
   const [closed, setClosed] = useState(props.initial.closed);
   const [hidden, setHidden] = useState(props.initial.hidden);
   const [openText, setOpenText] = useState(props.initial.open ? String(props.initial.open) : "0");
@@ -89,7 +90,7 @@ export function ReviewItemCard(props: ReviewItemProps) {
           <div className="min-w-0 flex-1">
             <h3 className="text-xl leading-tight">{name}</h3>
             <p className="mt-1 text-sm text-ink-soft">
-              Total <b className="text-ink">{total}</b> {countUnit}s
+              Total <b className="text-ink">{total}</b> {countUnit}s · <span className="font-medium">{formatGBP(restock.unit_cost_gbp)}/{orderUnit}</span>
               {r.order_qty > 0 ? (
                 <>
                   {" "}· Order <b className="text-ink">{r.order_qty}</b> {orderUnit}
@@ -176,9 +177,16 @@ export function ReviewItemCard(props: ReviewItemProps) {
             </button>
           </div>
         ) : (
-          <button type="button" className="mt-3 text-sm font-bold underline" onClick={() => setExpanded(true)}>
-            Edit
-          </button>
+          <div className="mt-3 flex items-center gap-4">
+            <button type="button" className="text-sm font-bold underline" onClick={() => setExpanded(true)}>
+              Edit count
+            </button>
+            {onEditProduct && (
+              <button type="button" className="text-sm font-bold text-brand-dark underline" onClick={onEditProduct}>
+                Edit product / £
+              </button>
+            )}
+          </div>
         )}
       </div>
     </article>

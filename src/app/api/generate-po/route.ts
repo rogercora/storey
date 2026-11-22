@@ -4,6 +4,7 @@ import { requireActiveUser } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { londonDay } from "@/lib/dates";
 import { computeRestock } from "@/lib/restock";
+import { recordActivity } from "@/lib/audit";
 
 export const runtime = "nodejs";
 
@@ -155,6 +156,15 @@ export async function POST(request: NextRequest) {
 
     createdIds.push(po.id as string);
   }
+
+  await recordActivity(supabase, {
+    actorId: auth.user.id,
+    action: "po_created",
+    entityType: "purchase_order",
+    entityId: createdIds[0] ?? null,
+    summary: `Generated ${createdIds.length} draft purchase order(s)`,
+    meta: { created_pos: createdIds },
+  });
 
   return NextResponse.json({ created_pos: createdIds, skipped_no_supplier: skippedNoSupplier });
 }

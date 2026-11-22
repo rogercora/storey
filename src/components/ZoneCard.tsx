@@ -14,20 +14,22 @@ export function ZoneCard({
   name,
   description,
   state,
+  meta,
 }: {
   href: string;
   name: string;
   description?: string | null;
   state: ZoneState;
+  meta?: string | null;
 }) {
   return (
     <Link href={href} className="card flex items-center justify-between gap-3 border-l-8 border-l-ink active:scale-[0.99]">
       <div>
         <p className="font-display text-2xl uppercase leading-none">{name}</p>
         {description && <p className="mt-1 text-sm text-ink-soft">{description}</p>}
+        {meta && <p className="mt-1 text-xs font-semibold text-brand-dark">{meta}</p>}
       </div>
       <span className={`chip shrink-0 ${style[state]}`}>{label[state]}</span>
     </Link>
   );
 }
-

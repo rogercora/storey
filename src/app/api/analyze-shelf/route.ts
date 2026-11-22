@@ -7,6 +7,7 @@ import { SYSTEM_PROMPT, buildUserPrompt } from "@/lib/ai/prompt";
 import { runVision, VisionError, type VisionImage } from "@/lib/ai/vision";
 import { reconcile, type ReadingStatus } from "@/lib/ai/reconcile";
 import { computeRestock } from "@/lib/restock";
+import { recordActivity } from "@/lib/audit";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -273,6 +274,15 @@ export async function POST(request: NextRequest) {
       };
     })
     .sort((a, b) => order[a.status] - order[b.status] || a.code_tag.localeCompare(b.code_tag));
+
+  await recordActivity(supabase, {
+    actorId: user.id,
+    action: "ai_shelf_analysed",
+    entityType: "session",
+    entityId: sessionId,
+    summary: `Analysed ${photos.length} photo(s) in ${zone.name}`,
+    meta: { zone_id, photos: photos.length, provider: vision.provider },
+  });
 
   return NextResponse.json({
     session_id: sessionId,
