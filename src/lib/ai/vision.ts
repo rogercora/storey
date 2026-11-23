@@ -22,13 +22,23 @@ export interface VisionResponse {
 }
 
 export class VisionError extends Error {
-  constructor(message: string, public readonly status = 502) {
+  constructor(
+    message: string,
+    public readonly status = 502,
+    public readonly upstreamStatus?: number,
+  ) {
     super(message);
     this.name = "VisionError";
   }
 }
 
 const TIMEOUT_MS = 55_000;
+const GEMINI_FALLBACK_MODELS = [
+  "gemini-3.6-flash",
+  "gemini-3.5-flash",
+  "gemini-3.8-flash",
+  "gemini-flash-latest",
+];
 
 export async function runVision(req: VisionRequest): Promise<VisionResponse> {
   const provider = (process.env.AI_PROVIDER ?? "gemini").toLowerCase();
@@ -40,8 +50,8 @@ export async function runVision(req: VisionRequest): Promise<VisionResponse> {
     return { json, provider: "openai", model, latencyMs: Date.now() - started };
   }
   if (provider === "gemini") {
-    const model = process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
-    const json = await callGemini(req, model);
+    const preferred = process.env.GEMINI_MODEL?.trim() || "gemini-3.6-flash";
+    const { json, model } = await callGeminiWithFallback(req, preferred);
     return { json, provider: "gemini", model, latencyMs: Date.now() - started };
   }
   throw new VisionError(`Unsupported AI_PROVIDER "${provider}"`, 500);
@@ -61,7 +71,11 @@ async function postJson(url: string, headers: Record<string, string>, body: unkn
     if (!res.ok) {
       // Log the provider detail server-side only; keep the client message generic.
       console.error("[vision] provider error", res.status, text.slice(0, 500));
-      throw new VisionError(res.status === 429 ? "AI service is busy, please retry shortly." : "AI analysis failed.", 502);
+      throw new VisionError(
+        res.status === 429 ? "AI service is busy, please retry shortly." : "AI analysis failed.",
+        502,
+        res.status,
+      );
     }
     return JSON.parse(text);
   } catch (e) {
@@ -111,6 +125,30 @@ async function callOpenAI(req: VisionRequest, model: string): Promise<unknown> {
 }
 
 // ------------------------------------------------------------------ Gemini ---
+async function callGeminiWithFallback(
+  req: VisionRequest,
+  preferredModel: string,
+): Promise<{ json: unknown; model: string }> {
+  const candidates = Array.from(new Set([preferredModel, ...GEMINI_FALLBACK_MODELS]));
+  let lastError: unknown;
+
+  for (const model of candidates) {
+    try {
+      const json = await callGemini(req, model);
+      return { json, model };
+    } catch (err) {
+      lastError = err;
+      const retryable =
+        err instanceof VisionError &&
+        (err.upstreamStatus === 404 || err.upstreamStatus === 503 || err.upstreamStatus === 429);
+      if (!retryable) throw err;
+      console.warn(`[vision] model ${model} unavailable (${err.upstreamStatus}), trying next fallback`);
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new VisionError("AI analysis failed.", 502);
+}
+
 async function callGemini(req: VisionRequest, model: string): Promise<unknown> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new VisionError("GEMINI_API_KEY is not configured.", 500);
