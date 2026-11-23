@@ -79,6 +79,9 @@ export function StocktakeClient({
   // Camera & photo capture state
   const [photos, setPhotos] = useState<PhotoDraft[]>([]);
   const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraStarting, setCameraStarting] = useState(false);
+  const [videoReady, setVideoReady] = useState(false);
+  const [streamVersion, setStreamVersion] = useState(0);
   const [torchSupported, setTorchSupported] = useState(false);
   const [torchOn, setTorchOn] = useState(false);
   const [online, setOnline] = useState(true);
@@ -91,6 +94,7 @@ export function StocktakeClient({
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const mountedRef = useRef(true);
   const editsRef = useRef<Map<string, ItemPatch>>(new Map());
 
   // Keep edits map in sync with items without clobbering existing edits
@@ -113,12 +117,60 @@ export function StocktakeClient({
   const stopCamera = useCallback(() => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
     setCameraOpen(false);
+    setCameraStarting(false);
+    setVideoReady(false);
     setTorchOn(false);
     setTorchSupported(false);
   }, []);
 
-  useEffect(() => () => stopCamera(), [stopCamera]);
+  useEffect(() => {
+    mountedRef.current = true;
+    const onHide = () => {
+      if (document.visibilityState === "hidden") stopCamera();
+    };
+    window.addEventListener("pagehide", stopCamera);
+    document.addEventListener("visibilitychange", onHide);
+    return () => {
+      mountedRef.current = false;
+      window.removeEventListener("pagehide", stopCamera);
+      document.removeEventListener("visibilitychange", onHide);
+      stopCamera();
+    };
+  }, [stopCamera]);
+
+  // Attach MediaStream only after React mounts the <video> element in the DOM.
+  useEffect(() => {
+    if (!cameraOpen) return;
+    const video = videoRef.current;
+    const stream = streamRef.current;
+    if (!video || !stream) return;
+
+    video.setAttribute("playsinline", "true");
+    video.muted = true;
+    video.srcObject = stream;
+
+    const markReady = () => {
+      if (video.videoWidth > 0 && video.videoHeight > 0) {
+        setVideoReady(true);
+      }
+    };
+
+    video.addEventListener("loadedmetadata", markReady);
+    video.addEventListener("canplay", markReady);
+    video.addEventListener("playing", markReady);
+    video.play().then(markReady).catch(() => {});
+    if (video.readyState >= 2) markReady();
+
+    return () => {
+      video.removeEventListener("loadedmetadata", markReady);
+      video.removeEventListener("canplay", markReady);
+      video.removeEventListener("playing", markReady);
+    };
+  }, [cameraOpen, streamVersion]);
 
   const refreshQueue = useCallback(async () => {
     try {
@@ -200,28 +252,70 @@ export function StocktakeClient({
     };
   }, [flushOfflineQueue, refreshQueue]);
 
-  async function startCamera() {
-    setError(null);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
-        audio: false,
-      });
-      streamRef.current = stream;
-      setCameraOpen(true);
+  async function openStreamWithRetry(): Promise<MediaStream> {
+    const candidates: MediaStreamConstraints[] = [
+      { video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false },
+      { video: { facingMode: "environment" }, audio: false },
+      { video: true, audio: false },
+    ];
 
+    let lastErr: unknown;
+    for (let i = 0; i < candidates.length; i++) {
+      try {
+        return await navigator.mediaDevices.getUserMedia(candidates[i]!);
+      } catch (err) {
+        lastErr = err;
+        const name = err instanceof DOMException ? err.name : "";
+        if (name === "NotAllowedError" || name === "SecurityError") throw err;
+        // Mobile camera HALs often need ~300ms right after first OS permission grant.
+        await new Promise((r) => setTimeout(r, 300));
+      }
+    }
+    throw lastErr;
+  }
+
+  async function startCamera() {
+    if (cameraStarting) return;
+    setError(null);
+
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      setError("Live camera preview is not supported in this browser. Use 'Use phone camera' below instead.");
+      return;
+    }
+
+    // Release any lingering hardware lock before acquiring a fresh stream.
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    setVideoReady(false);
+    setCameraStarting(true);
+
+    try {
+      const stream = await openStreamWithRetry();
+      if (!mountedRef.current) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+
+      streamRef.current = stream;
       const track = stream.getVideoTracks()[0];
+      if (track) {
+        track.onended = () => {
+          if (mountedRef.current) stopCamera();
+        };
+      }
       const caps = track?.getCapabilities?.() as { torch?: boolean } | undefined;
       setTorchSupported(Boolean(caps?.torch));
-
-      requestAnimationFrame(() => {
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          videoRef.current.play().catch(() => {});
-        }
-      });
-    } catch {
-      setError("Camera access was blocked. Use 'Upload photo' below instead.");
+      setStreamVersion((v) => v + 1);
+      setCameraOpen(true);
+    } catch (err) {
+      const name = err instanceof DOMException ? err.name : "";
+      if (name === "NotAllowedError" || name === "SecurityError") {
+        setError("Camera permission was blocked. Allow camera access in your browser settings or use 'Use phone camera' below.");
+      } else {
+        setError("Camera could not start right away. Tap 'Open camera' again or use 'Use phone camera' below.");
+      }
+    } finally {
+      if (mountedRef.current) setCameraStarting(false);
     }
   }
 
@@ -240,9 +334,13 @@ export function StocktakeClient({
   async function captureFrame() {
     const video = videoRef.current;
     if (!video || photos.length >= 4) return;
+    if (!video.videoWidth || !video.videoHeight) {
+      setError("Camera is still starting — please wait a moment and try again.");
+      return;
+    }
     const canvas = document.createElement("canvas");
-    canvas.width = video.videoWidth || 1280;
-    canvas.height = video.videoHeight || 960;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
@@ -535,47 +633,70 @@ export function StocktakeClient({
             {cameraOpen ? (
               <div className="mt-4 space-y-3">
                 <div className="relative aspect-[3/4] overflow-hidden border-2 border-ink bg-ink">
-                  <video ref={videoRef} playsInline muted className="h-full w-full object-cover" />
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <button type="button" className="btn-accent" onClick={captureFrame} disabled={photos.length >= 4}>
-                    Take photo
-                  </button>
-                  {torchSupported ? (
-                    <button type="button" className="btn-secondary" onClick={toggleTorch}>
-                      {torchOn ? "Torch ON" : "Torch OFF"}
-                    </button>
-                  ) : (
-                    <button type="button" className="btn-secondary" onClick={stopCamera}>
-                      Close camera
-                    </button>
+                  <video ref={videoRef} autoPlay playsInline muted className="h-full w-full object-cover" />
+                  {!videoReady && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-ink/80 text-sm font-semibold text-white">
+                      Starting camera…
+                    </div>
                   )}
                 </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    className="btn-accent"
+                    onClick={captureFrame}
+                    disabled={photos.length >= 4 || !videoReady}
+                  >
+                    {videoReady ? "Take photo" : "Starting…"}
+                  </button>
+                  <button type="button" className="btn-secondary" onClick={stopCamera}>
+                    Close camera
+                  </button>
+                </div>
+                {torchSupported && (
+                  <button type="button" className="btn-secondary w-full" onClick={toggleTorch}>
+                    {torchOn ? "Torch ON" : "Torch OFF"}
+                  </button>
+                )}
               </div>
             ) : (
               <div className="mt-4 space-y-3">
                 <button
                   type="button"
                   onClick={startCamera}
-                  disabled={photos.length >= 4}
+                  disabled={photos.length >= 4 || cameraStarting}
                   className="flex aspect-[4/3] w-full flex-col items-center justify-center border-2 border-dashed border-ink bg-ink text-white active:scale-[0.99]"
                 >
-                  <span className="font-display text-3xl text-volt">Open camera</span>
+                  <span className="font-display text-3xl text-volt">
+                    {cameraStarting ? "Opening camera…" : "Open camera"}
+                  </span>
                   <span className="mt-1 text-sm text-white/80">Tap to photograph {zone.name}</span>
                 </button>
 
-                <label className="btn-secondary w-full cursor-pointer">
-                  Upload / Choose photo
-                  <input
-                    type="file"
-                    accept="image/*"
-                    capture="environment"
-                    multiple
-                    className="sr-only"
-                    onChange={handleFileSelect}
-                    disabled={photos.length >= 4}
-                  />
-                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="btn-secondary w-full cursor-pointer text-center text-sm">
+                    Use phone camera
+                    <input
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      className="sr-only"
+                      onChange={handleFileSelect}
+                      disabled={photos.length >= 4}
+                    />
+                  </label>
+                  <label className="btn-secondary w-full cursor-pointer text-center text-sm">
+                    Choose from gallery
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      className="sr-only"
+                      onChange={handleFileSelect}
+                      disabled={photos.length >= 4}
+                    />
+                  </label>
+                </div>
               </div>
             )}
 
