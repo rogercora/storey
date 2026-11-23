@@ -33,11 +33,15 @@ export class VisionError extends Error {
 }
 
 const TIMEOUT_MS = 55_000;
+const TOTAL_GEMINI_BUDGET_MS = 42_000;
+const PER_GEMINI_ATTEMPT_MS = 12_000;
 const GEMINI_FALLBACK_MODELS = [
   "gemini-3.6-flash",
   "gemini-3.5-flash",
   "gemini-3.8-flash",
   "gemini-flash-latest",
+  "gemini-3.1-flash-lite",
+  "gemini-flash-lite-latest",
 ];
 
 export async function runVision(req: VisionRequest): Promise<VisionResponse> {
@@ -57,9 +61,14 @@ export async function runVision(req: VisionRequest): Promise<VisionResponse> {
   throw new VisionError(`Unsupported AI_PROVIDER "${provider}"`, 500);
 }
 
-async function postJson(url: string, headers: Record<string, string>, body: unknown): Promise<any> {
+async function postJson(
+  url: string,
+  headers: Record<string, string>,
+  body: unknown,
+  timeoutMs = TIMEOUT_MS,
+): Promise<any> {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(url, {
       method: "POST",
@@ -71,16 +80,16 @@ async function postJson(url: string, headers: Record<string, string>, body: unkn
     if (!res.ok) {
       // Log the provider detail server-side only; keep the client message generic.
       console.error("[vision] provider error", res.status, text.slice(0, 500));
-      throw new VisionError(
-        res.status === 429 ? "AI service is busy, please retry shortly." : "AI analysis failed.",
-        502,
-        res.status,
-      );
+      const msg =
+        res.status === 503 || res.status === 429
+          ? "Google AI is temporarily busy (high demand). Please retry in a few seconds."
+          : "AI analysis failed.";
+      throw new VisionError(msg, res.status === 503 || res.status === 429 ? 503 : 502, res.status);
     }
     return JSON.parse(text);
   } catch (e) {
     if (e instanceof VisionError) throw e;
-    if (e instanceof Error && e.name === "AbortError") throw new VisionError("AI analysis timed out.", 504);
+    if (e instanceof Error && e.name === "AbortError") throw new VisionError("AI analysis timed out.", 504, 504);
     console.error("[vision] request failed", e);
     throw new VisionError("AI analysis failed.", 502);
   } finally {
@@ -130,26 +139,35 @@ async function callGeminiWithFallback(
   preferredModel: string,
 ): Promise<{ json: unknown; model: string }> {
   const candidates = Array.from(new Set([preferredModel, ...GEMINI_FALLBACK_MODELS]));
+  const deadline = Date.now() + TOTAL_GEMINI_BUDGET_MS;
   let lastError: unknown;
 
   for (const model of candidates) {
+    const remaining = deadline - Date.now();
+    if (remaining < 3_000) break;
+
     try {
-      const json = await callGemini(req, model);
+      const json = await callGemini(req, model, Math.min(PER_GEMINI_ATTEMPT_MS, remaining));
       return { json, model };
     } catch (err) {
       lastError = err;
       const retryable =
         err instanceof VisionError &&
-        (err.upstreamStatus === 404 || err.upstreamStatus === 503 || err.upstreamStatus === 429);
+        (err.upstreamStatus === 404 ||
+          err.upstreamStatus === 503 ||
+          err.upstreamStatus === 429 ||
+          err.upstreamStatus === 504);
       if (!retryable) throw err;
       console.warn(`[vision] model ${model} unavailable (${err.upstreamStatus}), trying next fallback`);
     }
   }
 
-  throw lastError instanceof Error ? lastError : new VisionError("AI analysis failed.", 502);
+  throw lastError instanceof Error
+    ? lastError
+    : new VisionError("Google AI is temporarily busy (high demand). Please retry shortly.", 503);
 }
 
-async function callGemini(req: VisionRequest, model: string): Promise<unknown> {
+async function callGemini(req: VisionRequest, model: string, timeoutMs: number): Promise<unknown> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new VisionError("GEMINI_API_KEY is not configured.", 500);
 
@@ -173,6 +191,7 @@ async function callGemini(req: VisionRequest, model: string): Promise<unknown> {
         responseJsonSchema: req.jsonSchema,
       },
     },
+    timeoutMs,
   );
 
   const cand = data?.candidates?.[0];

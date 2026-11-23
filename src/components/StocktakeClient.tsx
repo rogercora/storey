@@ -182,24 +182,62 @@ export function StocktakeClient({
   }, [zone.id]);
 
   const uploadBatch = useCallback(
-    async (files: File[], targetSessionId?: string | null): Promise<boolean> => {
+    async (
+      files: File[],
+      targetSessionId?: string | null,
+    ): Promise<"ok" | "server_error" | "network_error"> => {
       const form = new FormData();
       form.append("zone_id", zone.id);
       if (targetSessionId) form.append("session_id", targetSessionId);
       for (const f of files.slice(0, 4)) form.append("photos", f);
 
-      const res = await fetch("/api/analyze-shelf", { method: "POST", body: form });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data?.error ?? "Analysis failed. Please try again.");
-        return false;
+      let res: Response;
+      try {
+        res = await fetch("/api/analyze-shelf", { method: "POST", body: form });
+      } catch {
+        return "network_error";
       }
 
-      const loadedRes = await fetch(`/api/sessions/${data.session_id}`);
-      const loaded = await loadedRes.json();
+      const raw = await res.text();
+      let data: any = null;
+      try {
+        data = raw ? JSON.parse(raw) : null;
+      } catch {
+        data = null;
+      }
+
+      if (!res.ok) {
+        const fallbackMsg =
+          res.status === 503 || res.status === 504
+            ? "AI service is temporarily busy. Please tap Analyse again in a moment."
+            : "Analysis failed. Please try again.";
+        setError(data?.error ?? fallbackMsg);
+        return "server_error";
+      }
+
+      if (!data?.session_id) {
+        setError("Unexpected response from analysis server. Please retry.");
+        return "server_error";
+      }
+
+      let loadedRes: Response;
+      try {
+        loadedRes = await fetch(`/api/sessions/${data.session_id}`);
+      } catch {
+        return "network_error";
+      }
+
+      const loadedRaw = await loadedRes.text();
+      let loaded: any = null;
+      try {
+        loaded = loadedRaw ? JSON.parse(loadedRaw) : null;
+      } catch {
+        loaded = null;
+      }
+
       if (!loadedRes.ok) {
         setError(loaded?.error ?? "Could not load analysed items.");
-        return false;
+        return "server_error";
       }
 
       editsRef.current = new Map();
@@ -210,7 +248,7 @@ export function StocktakeClient({
         unmatched_tags_seen: data.unmatched_tags_seen,
       });
       setMode("review");
-      return true;
+      return "ok";
     },
     [zone.id],
   );
@@ -221,20 +259,30 @@ export function StocktakeClient({
     if (batches.length === 0) return;
 
     setBusy(true);
-    setNotice("Back online — uploading queued photos…");
+    setError(null);
+    setNotice("Uploading queued photos…");
+    let failedServer = false;
     for (const batch of batches) {
-      try {
-        const files = batch.files.map((f) => new File([f.blob], f.name, { type: f.type }));
-        const ok = await uploadBatch(files, batch.sessionId ?? sessionId);
-        if (ok) await removeQueuedBatch(batch.id);
-      } catch {
+      const files = batch.files.map((f) => new File([f.blob], f.name, { type: f.type }));
+      const outcome = await uploadBatch(files, batch.sessionId ?? sessionId);
+      if (outcome === "ok") {
+        await removeQueuedBatch(batch.id);
+      } else {
+        failedServer = outcome === "server_error";
         break;
       }
     }
     await refreshQueue();
     setBusy(false);
-    setNotice(null);
+    setNotice(failedServer ? null : null);
   }, [zone.id, sessionId, uploadBatch, refreshQueue]);
+
+  async function discardOfflineQueue() {
+    for (const batch of queuedBatches) {
+      await removeQueuedBatch(batch.id);
+    }
+    await refreshQueue();
+  }
 
   useEffect(() => {
     setOnline(typeof navigator !== "undefined" ? navigator.onLine : true);
@@ -394,21 +442,22 @@ export function StocktakeClient({
 
     setBusy(true);
     try {
-      const ok = await uploadBatch(files, sessionId);
-      if (ok) {
+      const outcome = await uploadBatch(files, sessionId);
+      if (outcome === "ok") {
         photos.forEach((p) => URL.revokeObjectURL(p.previewUrl));
         setPhotos([]);
+      } else if (outcome === "network_error") {
+        await queuePhotos({
+          zoneId: zone.id,
+          sessionId: sessionId ?? undefined,
+          files: files.map((f) => ({ name: f.name, type: f.type, blob: f })),
+        });
+        photos.forEach((p) => URL.revokeObjectURL(p.previewUrl));
+        setPhotos([]);
+        await refreshQueue();
+        setNotice("Connection lost — photos queued offline and will retry automatically.");
       }
-    } catch {
-      await queuePhotos({
-        zoneId: zone.id,
-        sessionId: sessionId ?? undefined,
-        files: files.map((f) => ({ name: f.name, type: f.type, blob: f })),
-      });
-      photos.forEach((p) => URL.revokeObjectURL(p.previewUrl));
-      setPhotos([]);
-      await refreshQueue();
-      setNotice("Connection lost — photos queued offline and will retry automatically.");
+      // On "server_error", keep the photos visible so the user can retry right away.
     } finally {
       setBusy(false);
     }
@@ -598,11 +647,16 @@ export function StocktakeClient({
         {queuedBatches.length > 0 && (
           <div className="mb-4 flex items-center justify-between gap-2 border-2 border-ink bg-warn-light px-3 py-2 text-sm font-bold text-warn">
             <span>{queuedBatches.reduce((n, b) => n + b.files.length, 0)} photo(s) queued offline</span>
-            {online && (
-              <button type="button" className="underline" onClick={flushOfflineQueue} disabled={busy}>
-                Retry now
+            <div className="flex items-center gap-3">
+              {online && (
+                <button type="button" className="underline" onClick={flushOfflineQueue} disabled={busy}>
+                  Retry now
+                </button>
+              )}
+              <button type="button" className="underline text-ink-soft" onClick={discardOfflineQueue} disabled={busy}>
+                Clear
               </button>
-            )}
+            </div>
           </div>
         )}
         {error && (
@@ -757,6 +811,16 @@ export function StocktakeClient({
               <div className="border-2 border-ink bg-volt/40 p-3 text-sm">
                 <p className="font-bold">Unmatched handwritten codes seen:</p>
                 <p className="mt-1 font-mono font-bold">{meta.unmatched_tags_seen.join(", ")}</p>
+              </div>
+            )}
+
+            {meta && reviewItems.length === 0 && confirmedItems.length === 0 && (
+              <div className="border-2 border-ink bg-warn-light p-3 text-sm text-warn">
+                <p className="font-bold">No registered products matched in the photo</p>
+                <p className="mt-1">
+                  {zone.name} currently has {productCount} active product(s). Add missing products with{" "}
+                  <strong>+ Add product</strong> or update counts manually below.
+                </p>
               </div>
             )}
 
